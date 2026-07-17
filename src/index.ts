@@ -8,6 +8,7 @@ import {
 import { readFile } from "node:fs/promises";
 import { resolve, basename } from "node:path";
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 
 const APORIX_API_URL =
   process.env.APORIX_API_URL ||
@@ -205,7 +206,7 @@ function getOrCreateSession(sessionId?: string): { sessionId: string; session: S
   if (sessionId && sessions.has(sessionId)) {
     return { sessionId, session: sessions.get(sessionId)!, isNew: false };
   }
-  const id = sessionId || crypto.randomUUID();
+  const id = sessionId || randomUUID();
   const session: Session = { initialized: false, createdAt: Date.now() };
   sessions.set(id, session);
   return { sessionId: id, session, isNew: true };
@@ -223,7 +224,6 @@ function jsonRpcResult(id: unknown, result: unknown) {
 
 async function runHttp() {
   const { createServer: createHttpServer } = await import("node:http");
-  const { randomUUID } = await import("node:crypto");
 
   const mcpServer = createServer();
   const sseTransports = new Map<string, SSEServerTransport>();
@@ -260,7 +260,12 @@ async function runHttp() {
       res.on("close", () => {
         sseTransports.delete(sessionId);
       });
-      await mcpServer.connect(transport);
+      try {
+        await mcpServer.connect(transport);
+      } catch (err) {
+        sseTransports.delete(sessionId);
+        console.error("SSE connect error:", err);
+      }
       return;
     }
 
