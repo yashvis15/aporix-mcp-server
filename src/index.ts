@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "node:crypto";
+import { handleTelegramWebhook } from "./telegram.js";
 
 const APORIX_API_URL =
   process.env.APORIX_API_URL ||
@@ -204,6 +205,24 @@ async function runHttp() {
       return;
     }
 
+    // Telegram bot webhook
+    if (pathname === "/telegram-webhook" && req.method === "POST") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const body = Buffer.concat(chunks).toString("utf-8");
+      try {
+        const update = JSON.parse(body);
+        await handleTelegramWebhook(update, process.env.BOT_TOKEN || "", APORIX_API_URL);
+      } catch (err) {
+        console.error("[telegram-webhook] error:", err);
+      }
+      res.writeHead(200);
+      res.end("OK");
+      return;
+    }
+
     // MCP — GET establishes SSE stream (for standard MCP clients)
     if (pathname === "/mcp" && req.method === "GET") {
       const sessionId = randomUUID();
@@ -369,6 +388,7 @@ ${result.optimizedContext}`;
           version: "1.0.0",
           endpoint: "/mcp",
           health: "/health",
+          telegram_webhook: process.env.BOT_TOKEN ? "/telegram-webhook" : "not configured (set BOT_TOKEN)",
         })
       );
       return;
