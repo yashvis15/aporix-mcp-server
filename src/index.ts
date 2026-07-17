@@ -1,6 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -191,22 +191,18 @@ async function runStdio() {
   console.error("Aporix MCP server running on stdio");
 }
 
-/* ───── HTTP/Streamable transport ───── */
+/* ───── HTTP/SSE transport ───── */
 
 async function runHttp() {
   const { createServer: createHttpServer } = await import("node:http");
   const { randomUUID } = await import("node:crypto");
 
   const mcpServer = createServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-
-  await mcpServer.connect(transport);
-  console.error("MCP server connected to StreamableHTTP transport");
+  const transports = new Map<string, SSEServerTransport>();
 
   const httpServer = createHttpServer(async (req, res) => {
-    const parsedUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const baseUrl = `http://${req.headers.host || "localhost"}`;
+    const parsedUrl = new URL(req.url || "/", baseUrl);
     const pathname = parsedUrl.pathname;
 
     // CORS
@@ -227,15 +223,29 @@ async function runHttp() {
       return;
     }
 
-    // MCP endpoint — StreamableHTTP handles both GET (SSE) and POST (JSON-RPC)
-    if (pathname === "/mcp") {
-      try {
-        await transport.handleRequest(req, res);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: message }));
+    // MCP SSE endpoint — GET establishes SSE stream
+    if (pathname === "/mcp" && req.method === "GET") {
+      const sessionId = randomUUID();
+      const postEndpoint = `${baseUrl}/mcp?sessionId=${sessionId}`;
+      const transport = new SSEServerTransport(postEndpoint, res);
+      transports.set(sessionId, transport);
+      res.on("close", () => {
+        transports.delete(sessionId);
+      });
+      await mcpServer.connect(transport);
+      return;
+    }
+
+    // MCP POST endpoint — receives JSON-RPC messages
+    if (pathname === "/mcp" && req.method === "POST") {
+      const sessionId = parsedUrl.searchParams.get("sessionId") || "";
+      const transport = transports.get(sessionId);
+      if (!transport) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "No active session", hint: "Connect via GET /mcp first" }));
+        return;
       }
+      await transport.handlePostMessage(req, res);
       return;
     }
 
