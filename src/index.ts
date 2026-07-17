@@ -192,26 +192,6 @@ async function runStdio() {
   console.error("Aporix MCP server running on stdio");
 }
 
-/* ───── Session store ───── */
-
-interface Session {
-  initialized: boolean;
-  clientInfo?: Record<string, unknown>;
-  createdAt: number;
-}
-
-const sessions = new Map<string, Session>();
-
-function getOrCreateSession(sessionId?: string): { sessionId: string; session: Session; isNew: boolean } {
-  if (sessionId && sessions.has(sessionId)) {
-    return { sessionId, session: sessions.get(sessionId)!, isNew: false };
-  }
-  const id = sessionId || randomUUID();
-  const session: Session = { initialized: false, createdAt: Date.now() };
-  sessions.set(id, session);
-  return { sessionId: id, session, isNew: true };
-}
-
 function jsonRpcError(id: unknown, code: number, message: string, data?: unknown) {
   return { jsonrpc: "2.0", error: { code, message, data }, id };
 }
@@ -259,7 +239,6 @@ async function runHttp() {
       const sessionId = randomUUID();
       const transport = new SSEServerTransport(`/mcp?sessionId=${sessionId}`, res);
       sseTransports.set(sessionId, transport);
-      getOrCreateSession(sessionId);
       res.on("close", () => {
         sseTransports.delete(sessionId);
       });
@@ -298,28 +277,16 @@ async function runHttp() {
         return;
       }
 
-      // Standalone POST (no SSE session) — handle directly
-      // Check for session in header or query param
-      const mcpSessionId = (req.headers["mcp-session-id"] as string) || parsedUrl.searchParams.get("sessionId") || "";
-      const standaloneSessionId = mcpSessionId || randomUUID();
-      const { session: standaloneSession, isNew } = getOrCreateSession(standaloneSessionId);
-
+      // Standalone POST (no SSE session) — handle directly (stateless)
       if (message.method === "initialize") {
-        standaloneSession.initialized = true;
-        standaloneSession.clientInfo = (message.params as any)?.clientInfo || {};
-        res.setHeader("Mcp-Session-Id", standaloneSessionId);
+        const sessId = randomUUID();
+        res.setHeader("Mcp-Session-Id", sessId);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(jsonRpcResult(message.id, {
           protocolVersion: "2024-11-05",
           capabilities: { tools: {} },
           serverInfo: { name: "aporix-mcp-server", version: "1.0.0" },
         })));
-        return;
-      }
-
-      if (!standaloneSession.initialized && message.method !== "initialize") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(jsonRpcError(message.id, -32000, "Server not initialized. Send initialize first.")));
         return;
       }
 
