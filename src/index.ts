@@ -259,6 +259,7 @@ async function runHttp() {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       }
       const body = Buffer.concat(chunks).toString("utf-8");
+      console.error(`[POST] /mcp body: ${body.slice(0, 200)}`);
 
       let message: { jsonrpc: string; id: unknown; method?: string; params?: unknown };
       try {
@@ -280,19 +281,20 @@ async function runHttp() {
       // Standalone POST (no SSE session) — handle directly (stateless)
       if (message.method === "initialize") {
         const sessId = randomUUID();
-        res.setHeader("Mcp-Session-Id", sessId);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(jsonRpcResult(message.id, {
+        const resp = jsonRpcResult(message.id, {
           protocolVersion: "2024-11-05",
           capabilities: { tools: {} },
           serverInfo: { name: "aporix-mcp-server", version: "1.0.0" },
-        })));
+        });
+        console.error(`[POST] /mcp response: ${JSON.stringify(resp).slice(0, 200)}`);
+        res.setHeader("Mcp-Session-Id", sessId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(resp));
         return;
       }
 
       if (message.method === "tools/list") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(jsonRpcResult(message.id, {
+        const toolsResult = jsonRpcResult(message.id, {
           tools: [
             {
               name: "optimize_document",
@@ -316,7 +318,10 @@ async function runHttp() {
               },
             },
           ],
-        })));
+        });
+        console.error(`[POST] /mcp tools/list response: ${JSON.stringify(toolsResult).slice(0, 300)}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(toolsResult));
         return;
       }
 
