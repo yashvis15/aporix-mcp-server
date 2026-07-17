@@ -2,9 +2,18 @@ import https from "node:https";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
-function fetchUrl(url: string): Promise<string> {
+function fetchUrl(url: string, redirects = 5): Promise<string> {
+  const u = new URL(url);
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
+    const req = https.request(u, {
+      method: "GET",
+      headers: { "User-Agent": "AporixBot/1.0" },
+    }, (res) => {
+      if (res.statusCode && [301, 302, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
+        const loc = new URL(res.headers.location, url).href;
+        resolve(fetchUrl(loc, redirects - 1));
+        return;
+      }
       let data = "";
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
@@ -14,7 +23,9 @@ function fetchUrl(url: string): Promise<string> {
           reject(new Error(`HTTP ${res.statusCode}: ${data}`));
         }
       });
-    }).on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
   });
 }
 
@@ -111,13 +122,24 @@ function postFormData(
   });
 }
 
-function downloadFile(url: string): Promise<Buffer> {
+function downloadFile(url: string, redirects = 5): Promise<Buffer> {
+  const u = new URL(url);
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
+    const req = https.request(u, {
+      method: "GET",
+      headers: { "User-Agent": "AporixBot/1.0" },
+    }, (res) => {
+      if (res.statusCode && [301, 302, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
+        const loc = new URL(res.headers.location, url).href;
+        resolve(downloadFile(loc, redirects - 1));
+        return;
+      }
       const chunks: Buffer[] = [];
       res.on("data", (chunk: Buffer) => chunks.push(chunk));
       res.on("end", () => resolve(Buffer.concat(chunks)));
-    }).on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
   });
 }
 
