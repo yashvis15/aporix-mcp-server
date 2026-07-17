@@ -229,9 +229,12 @@ async function runHttp() {
   const sseTransports = new Map<string, SSEServerTransport>();
 
   const httpServer = createHttpServer(async (req, res) => {
+    try {
     const baseUrl = `http://${req.headers.host || "localhost"}`;
     const parsedUrl = new URL(req.url || "/", baseUrl);
     const pathname = parsedUrl.pathname;
+
+    console.error(`[${req.method}] ${pathname}`);
 
     // CORS
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -475,6 +478,13 @@ async function runHttp() {
 
     res.writeHead(404);
     res.end();
+    } catch (err) {
+      console.error("Unhandled error:", err);
+      try {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal server error" }));
+      } catch {}
+    }
   });
 
   httpServer.listen(PORT, () => {
