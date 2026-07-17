@@ -291,22 +291,25 @@ async function runHttp() {
       }
 
       // Standalone POST (no SSE session) — handle directly
-      const { session: session, isNew } = getOrCreateSession(sessionId || randomUUID());
+      // Check for session in header or query param
+      const mcpSessionId = (req.headers["mcp-session-id"] as string) || parsedUrl.searchParams.get("sessionId") || "";
+      const standaloneSessionId = mcpSessionId || randomUUID();
+      const { session: standaloneSession, isNew } = getOrCreateSession(standaloneSessionId);
 
       if (message.method === "initialize") {
-        session.initialized = true;
-        session.clientInfo = (message.params as any)?.clientInfo || {};
+        standaloneSession.initialized = true;
+        standaloneSession.clientInfo = (message.params as any)?.clientInfo || {};
+        res.setHeader("Mcp-Session-Id", standaloneSessionId);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(jsonRpcResult(message.id, {
           protocolVersion: "2024-11-05",
           capabilities: { tools: {} },
           serverInfo: { name: "aporix-mcp-server", version: "1.0.0" },
-          meta: { sessionId: sessionId || "pending" },
         })));
         return;
       }
 
-      if (!session.initialized && message.method !== "initialize") {
+      if (!standaloneSession.initialized && message.method !== "initialize") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(jsonRpcError(message.id, -32000, "Server not initialized. Send initialize first.")));
         return;
