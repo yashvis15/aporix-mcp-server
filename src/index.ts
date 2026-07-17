@@ -112,9 +112,25 @@ function createServer(): Server {
 
     try {
       const result = await callAporixApi(args.content, goal);
-      const summary = `📊 TOKEN STATS: ${result.originalTokens?.toLocaleString() ?? "?"} → ${result.optimizedTokens?.toLocaleString() ?? "?"} tokens · ${result.tokenSavingsPercent ?? "?"}% saved · $${result.costSavings?.toFixed(4) ?? "?"} saved · Confidence: ${result.qualityValidation?.confidenceScore ? Math.round(result.qualityValidation.confidenceScore * 100) + "%" : "?"}`;
+      const removed = result.qualityValidation?.removedSummary ?? "";
+      const preserved = result.qualityValidation?.preservedSummary ?? "";
+      const pct = result.tokenSavingsPercent ?? 0;
+      const conf = result.qualityValidation?.confidenceScore
+        ? Math.round(result.qualityValidation.confidenceScore * 100) + "%"
+        : "?";
+      const savings = result.costSavings?.toFixed(4) ?? "?";
+      const summary =
+`## Optimization Results
+
+- **Original:** ${result.originalTokens?.toLocaleString() ?? "?"} tokens
+- **Optimized:** ${result.optimizedTokens?.toLocaleString() ?? "?"} tokens
+- **Token reduction:** ${pct}% saved
+- **Cost saved:** $${savings}
+- **Confidence score:** ${conf}
+- **What was removed:** ${removed}
+- **What was preserved:** ${preserved}`;
       return {
-        content: [{ type: "text", text: `${summary}\n\n${JSON.stringify(result, null, 2)}` }],
+        content: [{ type: "text", text: `${summary}\n\nFull details:\n${JSON.stringify(result, null, 2)}` }],
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -284,13 +300,29 @@ async function runHttp() {
         try {
           const goal = args.goal.trim();
           const result = await callAporixApi(args.content, goal);
-          const summary = `📊 TOKEN STATS: ${result.originalTokens?.toLocaleString() ?? "?"} → ${result.optimizedTokens?.toLocaleString() ?? "?"} tokens · ${result.tokenSavingsPercent ?? "?"}% saved · $${result.costSavings?.toFixed(4) ?? "?"} saved · Confidence: ${result.qualityValidation?.confidenceScore ? Math.round(result.qualityValidation.confidenceScore * 100) + "%" : "?"}`;
+          const removed = result.qualityValidation?.removedSummary ?? "";
+          const preserved = result.qualityValidation?.preservedSummary ?? "";
+          const pct = result.tokenSavingsPercent ?? 0;
+          const conf = result.qualityValidation?.confidenceScore
+            ? Math.round(result.qualityValidation.confidenceScore * 100) + "%"
+            : "?";
+          const savings = result.costSavings?.toFixed(4) ?? "?";
+          const summary =
+`## Optimization Results
+
+- **Original:** ${result.originalTokens?.toLocaleString() ?? "?"} tokens
+- **Optimized:** ${result.optimizedTokens?.toLocaleString() ?? "?"} tokens
+- **Token reduction:** ${pct}% saved
+- **Cost saved:** $${savings}
+- **Confidence score:** ${conf}
+- **What was removed:** ${removed}
+- **What was preserved:** ${preserved}`;
 
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(jsonRpcResult(message.id, {
             content: [{
               type: "text",
-              text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
+              text: `${summary}\n\nFull details:\n${JSON.stringify(result, null, 2)}`,
             }],
           })));
         } catch (err) {
