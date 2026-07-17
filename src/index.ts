@@ -1,6 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -191,20 +191,25 @@ async function runStdio() {
   console.error("Aporix MCP server running on stdio");
 }
 
-/* ───── HTTP/SSE transport ───── */
+/* ───── HTTP/Streamable transport ───── */
 
 async function runHttp() {
   const { createServer: createHttpServer } = await import("node:http");
-  const { URL } = await import("node:url");
+  const { randomUUID } = await import("node:crypto");
 
-  const server = createServer();
-  const transports = new Map<string, SSEServerTransport>();
+  const mcpServer = createServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+
+  await mcpServer.connect(transport);
+  console.error("MCP server connected to StreamableHTTP transport");
 
   const httpServer = createHttpServer(async (req, res) => {
     const parsedUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const pathname = parsedUrl.pathname;
 
-    // CORS headers
+    // CORS
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -222,59 +227,14 @@ async function runHttp() {
       return;
     }
 
-    // MCP SSE endpoint
-    if (pathname === "/mcp" && req.method === "GET") {
-      const sessionId = parsedUrl.searchParams.get("sessionId") || crypto.randomUUID();
-      const transport = new SSEServerTransport(`/mcp?sessionId=${sessionId}`, res);
-      transports.set(sessionId, transport);
-
-      res.on("close", () => {
-        transports.delete(sessionId);
-      });
-
-      await server.connect(transport);
-      return;
-    }
-
-    // MCP message endpoint
-    if (pathname === "/mcp" && req.method === "POST") {
-      const sessionId = parsedUrl.searchParams.get("sessionId") || "";
-      const transport = transports.get(sessionId);
-
-      if (!transport) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "No active session. Connect via GET /mcp first." }));
-        return;
-      }
-
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
-      }
-      const body = Buffer.concat(chunks).toString("utf-8");
-
-      const mockRes = new (await import("node:http")).ServerResponse(req);
-      const chunksOut: Buffer[] = [];
-      mockRes.writeHead = () => mockRes;
-      mockRes.end = (data?: any) => {
-        if (data) chunksOut.push(Buffer.from(data));
-        return mockRes;
-      };
-      mockRes.write = (data: any) => {
-        chunksOut.push(Buffer.from(data));
-        return true;
-      };
-
-      await transport.handlePostMessage(req as any, mockRes as any);
-
-      if (chunksOut.length > 0) {
-        res.writeHead(mockRes.statusCode || 200, {
-          "Content-Type": "application/json",
-        });
-        res.end(Buffer.concat(chunksOut));
-      } else {
-        res.writeHead(202);
-        res.end();
+    // MCP endpoint — StreamableHTTP handles both GET (SSE) and POST (JSON-RPC)
+    if (pathname === "/mcp") {
+      try {
+        await transport.handleRequest(req, res);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: message }));
       }
       return;
     }
