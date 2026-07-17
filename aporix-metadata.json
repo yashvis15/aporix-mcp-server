@@ -1,0 +1,27 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Aporix",
+  "description": "AI document optimization agent that analyzes documents, compresses context for LLMs, validates quality, and calculates token savings. Reduces token usage by removing boilerplate, recitals, and irrelevant content while preserving goal-relevant facts, dates, names, and obligations.",
+  "image": "https://aporix-v3-agent1.vercel.app/favicon.ico",
+  "services": [
+    {
+      "name": "web",
+      "endpoint": "https://aporix-v3-agent1.vercel.app/",
+      "version": "2.0.0"
+    },
+    {
+      "name": "API",
+      "endpoint": "https://aporix-v3-agent1.vercel.app/api/optimize",
+      "version": "1.0.0"
+    }
+  ],
+  "x402Support": false,
+  "active": true,
+  "registrations": [
+    {
+      "agentId": 83,
+      "agentRegistry": "eip155:2345:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+    }
+  ],
+  "supportedTrust": ["reputation"]
+}
