@@ -5,16 +5,52 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { readFile } from "node:fs/promises";
-import { resolve, basename } from "node:path";
-import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 const APORIX_API_URL =
   process.env.APORIX_API_URL ||
   "https://aporix-v3-agent1.vercel.app/api/optimize";
 const PORT = parseInt(process.env.PORT || "3001", 10);
-const VALID_EXTENSIONS = [".pdf", ".txt", ".json", ".md"];
+
+async function callAporixApi(fileContent: string, goal: string, fileName = "document.txt") {
+  const formData = new FormData();
+  const blob = new Blob([fileContent], { type: "text/plain" });
+  formData.append("file", blob, fileName);
+  formData.append("goal", goal);
+
+  const response = await fetch(APORIX_API_URL, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "Unknown error");
+    throw new Error(`Aporix API error (${response.status}): ${errorBody}`);
+  }
+
+  const data = await response.json();
+  if (!data.success) {
+    throw new Error(`Aporix API error: ${data.error || "Unknown error"}`);
+  }
+
+  const stats = {
+    optimizedContext: data.optimizedText,
+    originalTokens: data.tokenStats.originalTokens,
+    optimizedTokens: data.tokenStats.optimizedTokens,
+    tokenSavingsPercent: data.tokenStats.percentSaved,
+    costSavings: data.costAnalysis.savings,
+    qualityValidation: {
+      confidenceScore: data.trustLayer.confidenceScore,
+      semanticSimilarity: data.trustLayer.semanticSimilarity,
+      removedSummary: data.removedSummary,
+      preservedSummary: data.trustLayer.preservedSummary,
+      optimizationReasoning: data.trustLayer.optimizationReasoning,
+      warnings: data.trustLayer.warnings || [],
+    },
+  };
+
+  return stats;
+}
 
 function createServer(): Server {
   const server = new Server(
@@ -27,14 +63,14 @@ function createServer(): Server {
       {
         name: "optimize_document",
         description:
-          "Optimizes documents into task-specific LLM context and returns token savings and quality metrics. Removes boilerplate, recitals, definitions, and irrelevant content while preserving goal-relevant facts, dates, names, and obligations.",
+          "Optimizes document text into task-specific LLM context and returns token savings and quality metrics. Removes boilerplate, recitals, definitions, and irrelevant content while preserving goal-relevant facts, dates, names, and obligations.",
         inputSchema: {
           type: "object",
           properties: {
-            file_path: {
+            content: {
               type: "string",
               description:
-                "Absolute path to the document file on disk. Supported formats: PDF, TXT, JSON, MD.",
+                "The full text content of the document to optimize.",
             },
             goal: {
               type: "string",
@@ -42,7 +78,7 @@ function createServer(): Server {
                 "The optimization goal or task (e.g. 'extract key risks', 'summarize obligations', 'list payment terms').",
             },
           },
-          required: ["file_path", "goal"],
+          required: ["content", "goal"],
         },
       },
     ],
@@ -54,21 +90,19 @@ function createServer(): Server {
     }
 
     const args = request.params.arguments as Record<string, string> | undefined;
-    if (!args?.file_path || !args?.goal) {
+    if (!args?.content || !args?.goal) {
       return {
         content: [
           {
             type: "text",
-            text: "Error: Both 'file_path' and 'goal' are required.",
+            text: "Error: Both 'content' and 'goal' are required.",
           },
         ],
         isError: true,
       };
     }
 
-    const filePath = resolve(args.file_path);
     const goal = args.goal.trim();
-
     if (!goal) {
       return {
         content: [{ type: "text", text: "Error: 'goal' cannot be empty." }],
@@ -76,105 +110,16 @@ function createServer(): Server {
       };
     }
 
-    if (!existsSync(filePath)) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error: File not found at "${filePath}".`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const ext = filePath.toLowerCase().slice(filePath.lastIndexOf("."));
-    if (!VALID_EXTENSIONS.includes(ext)) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error: Unsupported file format "${ext}". Supported: ${VALID_EXTENSIONS.join(", ")}.`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
     try {
-      const fileBuffer = await readFile(filePath);
-      const fileName = basename(filePath);
-
-      const formData = new FormData();
-      const blob = new Blob([fileBuffer], { type: "application/octet-stream" });
-      formData.append("file", blob, fileName);
-      formData.append("goal", goal);
-
-      const response = await fetch(APORIX_API_URL, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => "Unknown error");
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Aporix API error (${response.status}): ${errorBody}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const data = await response.json();
-
-      if (!data.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Aporix API error: ${data.error || "Unknown error"}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const result = {
-        optimizedContext: data.optimizedText,
-        originalTokens: data.tokenStats.originalTokens,
-        optimizedTokens: data.tokenStats.optimizedTokens,
-        tokenSavingsPercent: data.tokenStats.percentSaved,
-        costSavings: data.costAnalysis.savings,
-        qualityValidation: {
-          confidenceScore: data.trustLayer.confidenceScore,
-          semanticSimilarity: data.trustLayer.semanticSimilarity,
-          removedSummary: data.removedSummary,
-          preservedSummary: data.trustLayer.preservedSummary,
-          optimizationReasoning: data.trustLayer.optimizationReasoning,
-          warnings: data.trustLayer.warnings || [],
-        },
-      };
-
+      const result = await callAporixApi(args.content, goal);
+      const summary = `📊 TOKEN STATS: ${result.originalTokens?.toLocaleString() ?? "?"} → ${result.optimizedTokens?.toLocaleString() ?? "?"} tokens · ${result.tokenSavingsPercent ?? "?"}% saved · $${result.costSavings?.toFixed(4) ?? "?"} saved · Confidence: ${result.qualityValidation?.confidenceScore ? Math.round(result.qualityValidation.confidenceScore * 100) + "%" : "?"}`;
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: `${summary}\n\n${JSON.stringify(result, null, 2)}` }],
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Error calling Aporix API: ${message}`,
-          },
-        ],
+        content: [{ type: "text", text: `Error: ${message}` }],
         isError: true,
       };
     }
@@ -299,14 +244,14 @@ async function runHttp() {
             {
               name: "optimize_document",
               description:
-                "Optimizes documents into task-specific LLM context and returns token savings and quality metrics. Removes boilerplate, recitals, definitions, and irrelevant content while preserving goal-relevant facts, dates, names, and obligations.",
+                "Optimizes document text into task-specific LLM context and returns token savings and quality metrics. Removes boilerplate, recitals, definitions, and irrelevant content while preserving goal-relevant facts, dates, names, and obligations.",
               inputSchema: {
                 type: "object",
                 properties: {
-                  file_path: {
+                  content: {
                     type: "string",
                     description:
-                      "Absolute path to the document file on disk. Supported formats: PDF, TXT, JSON, MD.",
+                      "The full text content of the document to optimize.",
                   },
                   goal: {
                     type: "string",
@@ -314,7 +259,7 @@ async function runHttp() {
                       "The optimization goal or task (e.g. 'extract key risks', 'summarize obligations', 'list payment terms').",
                   },
                 },
-                required: ["file_path", "goal"],
+                required: ["content", "goal"],
               },
             },
           ],
@@ -327,94 +272,25 @@ async function runHttp() {
 
       if (message.method === "tools/call") {
         const args = (message.params as any)?.arguments as Record<string, string> | undefined;
-        if (!args?.file_path || !args?.goal) {
+        if (!args?.content || !args?.goal) {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(jsonRpcResult(message.id, {
-            content: [{ type: "text", text: "Error: Both 'file_path' and 'goal' are required." }],
+            content: [{ type: "text", text: "Error: Both 'content' and 'goal' are required." }],
             isError: true,
           })));
           return;
         }
 
         try {
-          const { readFile } = await import("node:fs/promises");
-          const { resolve, basename } = await import("node:path");
-          const { existsSync } = await import("node:fs");
-
-          const filePath = resolve(args.file_path);
           const goal = args.goal.trim();
-
-          if (!existsSync(filePath)) {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(jsonRpcResult(message.id, {
-              content: [{ type: "text", text: `Error: File not found at "${filePath}".` }],
-              isError: true,
-            })));
-            return;
-          }
-
-          const VALID_EXTENSIONS = [".pdf", ".txt", ".json", ".md"];
-          const ext = filePath.toLowerCase().slice(filePath.lastIndexOf("."));
-          if (!VALID_EXTENSIONS.includes(ext)) {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(jsonRpcResult(message.id, {
-              content: [{ type: "text", text: `Error: Unsupported file format "${ext}". Supported: ${VALID_EXTENSIONS.join(", ")}.` }],
-              isError: true,
-            })));
-            return;
-          }
-
-          const fileBuffer = await readFile(filePath);
-          const fileName = basename(filePath);
-
-          const formData = new FormData();
-          const blob = new Blob([fileBuffer], { type: "application/octet-stream" });
-          formData.append("file", blob, fileName);
-          formData.append("goal", goal);
-
-          const apiUrl = process.env.APORIX_API_URL || "https://aporix-v3-agent1.vercel.app/api/optimize";
-          const response = await fetch(apiUrl, { method: "POST", body: formData });
-
-          if (!response.ok) {
-            const errorBody = await response.text().catch(() => "Unknown error");
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(jsonRpcResult(message.id, {
-              content: [{ type: "text", text: `Aporix API error (${response.status}): ${errorBody}` }],
-              isError: true,
-            })));
-            return;
-          }
-
-          const data = await response.json();
-
-          if (!data.success) {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(jsonRpcResult(message.id, {
-              content: [{ type: "text", text: `Aporix API error: ${data.error || "Unknown error"}` }],
-              isError: true,
-            })));
-            return;
-          }
+          const result = await callAporixApi(args.content, goal);
+          const summary = `📊 TOKEN STATS: ${result.originalTokens?.toLocaleString() ?? "?"} → ${result.optimizedTokens?.toLocaleString() ?? "?"} tokens · ${result.tokenSavingsPercent ?? "?"}% saved · $${result.costSavings?.toFixed(4) ?? "?"} saved · Confidence: ${result.qualityValidation?.confidenceScore ? Math.round(result.qualityValidation.confidenceScore * 100) + "%" : "?"}`;
 
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(jsonRpcResult(message.id, {
             content: [{
               type: "text",
-              text: JSON.stringify({
-                optimizedContext: data.optimizedText,
-                originalTokens: data.tokenStats.originalTokens,
-                optimizedTokens: data.tokenStats.optimizedTokens,
-                tokenSavingsPercent: data.tokenStats.percentSaved,
-                costSavings: data.costAnalysis.savings,
-                qualityValidation: {
-                  confidenceScore: data.trustLayer.confidenceScore,
-                  semanticSimilarity: data.trustLayer.semanticSimilarity,
-                  removedSummary: data.removedSummary,
-                  preservedSummary: data.trustLayer.preservedSummary,
-                  optimizationReasoning: data.trustLayer.optimizationReasoning,
-                  warnings: data.trustLayer.warnings || [],
-                },
-              }, null, 2),
+              text: `${summary}\n\n${JSON.stringify(result, null, 2)}`,
             }],
           })));
         } catch (err) {
